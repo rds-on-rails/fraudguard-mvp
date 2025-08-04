@@ -66,11 +66,13 @@ async def general_exception_handler(request, exc):
 
 class Transaction(BaseModel):
     """Enhanced transaction data model with validation."""
-    user_id: str = Field(..., min_length=1, description="User identifier (UUID recommended)")
+    transaction_id: str = Field(..., min_length=1, description="Transaction identifier (UUID recommended)")
     amount: float = Field(..., gt=0, le=1000000, description="Transaction amount (must be positive)")
     timestamp: datetime = Field(..., description="Transaction timestamp")
     location: str = Field(..., min_length=1, max_length=100, description="Transaction location")
-    device_id: str = Field(..., min_length=1, description="Device identifier")
+    device_type: str = Field(..., min_length=1, description="Device type (mobile, desktop, tablet)")
+    merchant_id: str = Field(..., min_length=1, description="Merchant identifier")
+    user_id: str = Field(..., min_length=1, description="User identifier (UUID recommended)")
     
     @validator('amount')
     def validate_amount(cls, v):

@@ -36,11 +36,10 @@ def generate_dummy_data(n: int = 1000) -> pd.DataFrame:
     transactions = []
     
     # Generate some consistent patterns for realistic data
-    users = [str(uuid.uuid4()) for _ in range(min(200, n // 5))]
-    devices = [fake.uuid4() for _ in range(min(100, n // 10))]
-    locations = [fake.city() for _ in range(min(50, n // 20))]
+    users = [str(uuid.uuid4()) for _ in range(max(1, min(200, n // 5)))]
+    locations = [fake.city() for _ in range(max(1, min(50, n // 20)))]
     device_types = ['mobile', 'desktop', 'tablet']
-    merchants = [fake.company() for _ in range(min(100, n // 10))]
+    merchants = [fake.company() for _ in range(max(1, min(100, n // 10)))]
     
     for _ in range(n):
         # Create mostly normal transactions with some outliers
