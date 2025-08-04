@@ -17,6 +17,7 @@ import traceback
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models.model import generate_dummy_data, train_model, predict_fraud, get_model_info, is_model_trained
+import pandas as pd
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -125,24 +126,19 @@ async def startup_event():
     """Initialize and train the model on startup."""
     try:
         logger.info("🚀 Starting FraudGuard Enhanced API...")
-        logger.info("📊 Generating training data...")
+        logger.info("📊 Initializing fraud detection model...")
         
-        # Generate 1000 dummy records and train the model
-        training_data = generate_dummy_data(n=1000)
-        
-        logger.info("🤖 Training fraud detection model...")
-        training_result = train_model(training_data)
+        # Train model (generates its own training data)
+        model_info = train_model()
         
         logger.info("✅ Model training completed successfully!")
-        logger.info(f"   - Training samples: {training_result['training_samples']}")
-        logger.info(f"   - Features: {training_result['feature_count']}")
-        logger.info(f"   - Anomaly rate: {training_result['anomaly_rate']}%")
-        logger.info("🎯 API ready for fraud detection!")
+        logger.info(f"   - Training samples: {model_info['training_samples']}")
+        logger.info(f"   - Feature count: {model_info['feature_count']}")
+        logger.info(f"   - Anomaly detection rate: {model_info['anomaly_rate']}%")
         
     except Exception as e:
-        logger.error(f"❌ Failed to initialize model: {e}")
-        logger.error(traceback.format_exc())
-        raise
+        logger.error(f"❌ Failed to initialize fraud detection model: {e}")
+        logger.error("⚠️  API will start but fraud detection will not be available")
 
 @app.get("/", tags=["Health"])
 async def root():
@@ -198,23 +194,14 @@ async def predict_fraud_endpoint(batch: TransactionBatch):
         
         logger.info(f"🔍 Processing {len(batch.transactions)} transactions for fraud detection")
         
-        # Convert Pydantic models to dictionaries
-        transactions_dict = []
-        for i, transaction in enumerate(batch.transactions):
-            try:
-                tx_dict = transaction.dict()
-                # Convert datetime to string for JSON serialization
-                tx_dict['timestamp'] = tx_dict['timestamp'].isoformat()
-                transactions_dict.append(tx_dict)
-            except Exception as e:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Invalid transaction at index {i}: {str(e)}"
-                )
+        # Convert to DataFrame
+        transactions_data = [tx.dict() for tx in batch.transactions]
+        df = pd.DataFrame(transactions_data)
         
         # Get predictions
         try:
-            predictions = predict_fraud(transactions_dict)
+            result_df = predict_fraud(df)
+            predictions = result_df.to_dict('records')
         except ValueError as e:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

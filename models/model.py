@@ -28,7 +28,7 @@ def generate_dummy_data(n: int = 1000) -> pd.DataFrame:
         n: Number of transaction records to generate
         
     Returns:
-        DataFrame with columns: user_id, amount, timestamp, location, device_id
+        DataFrame with columns: transaction_id, amount, timestamp, location, device_type, merchant_id, user_id
     """
     fake = Faker()
     logger.info(f"Generating {n} dummy transaction records...")
@@ -39,6 +39,8 @@ def generate_dummy_data(n: int = 1000) -> pd.DataFrame:
     users = [str(uuid.uuid4()) for _ in range(min(200, n // 5))]
     devices = [fake.uuid4() for _ in range(min(100, n // 10))]
     locations = [fake.city() for _ in range(min(50, n // 20))]
+    device_types = ['mobile', 'desktop', 'tablet']
+    merchants = [fake.company() for _ in range(min(100, n // 10))]
     
     for _ in range(n):
         # Create mostly normal transactions with some outliers
@@ -48,14 +50,16 @@ def generate_dummy_data(n: int = 1000) -> pd.DataFrame:
             amount = np.random.uniform(0.01, 1000)  # Normal amounts
         
         transaction = {
-            'user_id': np.random.choice(users),
+            'transaction_id': str(uuid.uuid4()),
             'amount': round(amount, 2),
             'timestamp': fake.date_time_between(
                 start_date='-30d',
                 end_date='now'
             ),
             'location': np.random.choice(locations),
-            'device_id': np.random.choice(devices)
+            'device_type': np.random.choice(device_types),
+            'merchant_id': np.random.choice(merchants),
+            'user_id': np.random.choice(users)
         }
         transactions.append(transaction)
     
@@ -64,6 +68,19 @@ def generate_dummy_data(n: int = 1000) -> pd.DataFrame:
     
     logger.info(f"Generated {len(df)} transaction records successfully")
     return df
+
+def preprocess_data(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Convert timestamp to hour and encode categorical values (label encoding).
+    Return only numerical features for training.
+    
+    Args:
+        df: Raw transaction DataFrame
+        
+    Returns:
+        DataFrame with only numerical features
+    """
+    return _extract_features(df)
 
 def _extract_features(data: pd.DataFrame) -> pd.DataFrame:
     """
@@ -97,60 +114,66 @@ def _extract_features(data: pd.DataFrame) -> pd.DataFrame:
     user_stats['user_std_amount'] = user_stats['user_std_amount'].fillna(0)
     df = df.merge(user_stats, on='user_id', how='left')
     
-    # Device behavior features
-    device_stats = df.groupby('device_id')['amount'].agg(['count', 'mean']).reset_index()
-    device_stats.columns = ['device_id', 'device_transaction_count', 'device_avg_amount']
-    df = df.merge(device_stats, on='device_id', how='left')
+    # Merchant behavior features
+    merchant_stats = df.groupby('merchant_id')['amount'].agg(['count', 'mean']).reset_index()
+    merchant_stats.columns = ['merchant_id', 'merchant_transaction_count', 'merchant_avg_amount']
+    df = df.merge(merchant_stats, on='merchant_id', how='left')
     
-    # Location encoding (using global label encoders for consistency)
+    # Categorical encoding (using global label encoders for consistency)
     global _label_encoders
     
-    if 'location' not in _label_encoders:
-        _label_encoders['location'] = LabelEncoder()
-        df['location_encoded'] = _label_encoders['location'].fit_transform(df['location'])
-    else:
-        # Handle new locations not seen during training
-        known_locations = set(_label_encoders['location'].classes_)
-        df['location_mapped'] = df['location'].apply(
-            lambda x: x if x in known_locations else 'unknown'
-        )
-        
-        # Add 'unknown' to encoder if not present
-        if 'unknown' not in known_locations:
-            _label_encoders['location'].classes_ = np.append(_label_encoders['location'].classes_, 'unknown')
-        
-        df['location_encoded'] = _label_encoders['location'].transform(df['location_mapped'])
-        df = df.drop('location_mapped', axis=1)
+    categorical_cols = ['location', 'device_type', 'merchant_id', 'user_id']
     
-    # Select numerical features for the model
+    for col in categorical_cols:
+        if col not in _label_encoders:
+            _label_encoders[col] = LabelEncoder()
+            df[f'{col}_encoded'] = _label_encoders[col].fit_transform(df[col].astype(str))
+        else:
+            # Handle new values not seen during training
+            known_values = set(_label_encoders[col].classes_)
+            df[f'{col}_mapped'] = df[col].astype(str).apply(
+                lambda x: x if x in known_values else 'unknown'
+            )
+            
+            # Add 'unknown' to encoder if not present
+            if 'unknown' not in _label_encoders[col].classes_:
+                _label_encoders[col].classes_ = np.append(_label_encoders[col].classes_, 'unknown')
+            
+            df[f'{col}_encoded'] = _label_encoders[col].transform(df[f'{col}_mapped'])
+    
+    # Select only numerical features for ML model
     feature_columns = [
-        'amount', 'amount_log', 'amount_zscore',
-        'hour', 'day_of_week', 'is_weekend', 'timestamp_numeric',
-        'user_avg_amount', 'user_std_amount', 'user_transaction_count',
-        'device_transaction_count', 'device_avg_amount',
-        'location_encoded'
+        'amount', 'amount_log', 'amount_zscore', 'hour', 'day_of_week', 'is_weekend',
+        'timestamp_numeric', 'user_avg_amount', 'user_std_amount', 'user_transaction_count',
+        'merchant_transaction_count', 'merchant_avg_amount',
+        'location_encoded', 'device_type_encoded', 'merchant_id_encoded', 'user_id_encoded'
     ]
     
-    # Fill any remaining NaN values
+    # Ensure all feature columns exist
+    for col in feature_columns:
+        if col not in df.columns:
+            df[col] = 0
+    
     features_df = df[feature_columns].fillna(0)
     
     return features_df
 
-def train_model(data: pd.DataFrame) -> Dict[str, Any]:
+def train_model() -> Dict[str, Any]:
     """
-    Train the Isolation Forest model on the provided data.
+    Train the Isolation Forest model using generated dummy data.
     
-    Args:
-        data: Training data DataFrame with columns: user_id, amount, timestamp, location, device_id
-        
     Returns:
         Dictionary with training results and model info
     """
     global _trained_model, _scaler, _feature_columns
     
-    logger.info(f"Training Isolation Forest model on {len(data)} transactions...")
+    logger.info("Training Isolation Forest model with generated dummy data...")
     
     try:
+        # Generate training data
+        data = generate_dummy_data(1000)
+        logger.info(f"Generated {len(data)} training transactions")
+        
         # Extract features
         features = _extract_features(data)
         _feature_columns = features.columns.tolist()
@@ -193,26 +216,25 @@ def train_model(data: pd.DataFrame) -> Dict[str, Any]:
         logger.error(f"Error during model training: {str(e)}")
         raise
 
-def predict_fraud(transactions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def predict_fraud(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Predict fraud for a list of transactions.
+    Predict fraud for raw transaction data.
+    Accepts raw transaction data (same schema as dummy) and returns fraud flags.
     
     Args:
-        transactions: List of transaction dictionaries
+        df: Raw transaction DataFrame
         
     Returns:
-        List of prediction results with fraud flags and scores
+        Original DataFrame with added fraud_flag column (1: fraud, 0: normal)
     """
     global _trained_model, _scaler, _feature_columns
     
     if _trained_model is None or _scaler is None:
         raise ValueError("Model not trained. Please train the model first.")
     
-    logger.info(f"Predicting fraud for {len(transactions)} transactions...")
+    logger.info(f"Predicting fraud for {len(df)} transactions...")
     
     try:
-        # Convert to DataFrame
-        df = pd.DataFrame(transactions)
         
         # Extract features
         features = _extract_features(df)
@@ -229,26 +251,18 @@ def predict_fraud(transactions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         
         # Make predictions
         predictions = _trained_model.predict(features_scaled)
-        scores = _trained_model.decision_function(features_scaled)
         
-        # Prepare results
-        results = []
-        for i, transaction in enumerate(transactions):
-            fraud_flag = 1 if predictions[i] == -1 else 0
-            prediction_score = float(scores[i])
-            
-            result = {
-                **transaction,  # Include original transaction data
-                'fraud_flag': fraud_flag,
-                'prediction_score': round(prediction_score, 4),
-                'risk_level': 'high' if fraud_flag == 1 else 'low'
-            }
-            results.append(result)
+        # Convert predictions to fraud flags (1: fraud, 0: normal)
+        fraud_flags = [1 if pred == -1 else 0 for pred in predictions]
         
-        fraud_count = sum(1 for r in results if r['fraud_flag'] == 1)
-        logger.info(f"Fraud prediction completed: {fraud_count}/{len(results)} flagged as suspicious")
+        # Add fraud_flag to original DataFrame
+        result_df = df.copy()
+        result_df['fraud_flag'] = fraud_flags
         
-        return results
+        fraud_count = sum(fraud_flags)
+        logger.info(f"Fraud prediction completed: {fraud_count}/{len(result_df)} flagged as suspicious")
+        
+        return result_df
         
     except Exception as e:
         logger.error(f"Error during fraud prediction: {str(e)}")

@@ -1,25 +1,19 @@
 """
-Streamlit frontend for FraudGuard MVP.
-Provides a web interface for fraud detection analysis.
+Enhanced Interactive Streamlit Frontend for FraudGuard MVP.
+Provides live fraud detection with visual displays and interactive filtering.
 """
 import streamlit as st
 import pandas as pd
 import requests
 import json
-import sys
-import os
 from datetime import datetime, timedelta
 import plotly.express as px
 import plotly.graph_objects as go
-
-# Add parent directory to path to import modules
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from utils.data_simulator import generate_transaction_data
+import numpy as np
 
 # Page configuration
 st.set_page_config(
-    page_title="FraudGuard MVP",
+    page_title="FraudGuard MVP - Live Fraud Detection",
     page_icon="🛡️",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -28,18 +22,40 @@ st.set_page_config(
 # API configuration
 API_BASE_URL = "http://localhost:8000"
 
-def call_fraud_api(transactions_data):
-    """Call the fraud detection API."""
+def generate_sample_data(n_transactions=50):
+    """Generate sample transaction data for testing."""
+    try:
+        response = requests.post(
+            f"{API_BASE_URL}/generate-data",
+            params={"n": n_transactions},
+            timeout=10
+        )
+        if response.status_code == 200:
+            data = response.json()
+            df = pd.DataFrame(data['transactions'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            return df
+        else:
+            st.error(f"Failed to generate data: {response.status_code}")
+            return None
+    except Exception as e:
+        st.error(f"Error generating data: {str(e)}")
+        return None
+
+def call_fraud_prediction_api(transactions_df):
+    """Call the fraud detection API with DataFrame."""
     try:
         # Prepare the data for API call
         transactions_list = []
-        for _, row in transactions_data.iterrows():
+        for _, row in transactions_df.iterrows():
             transaction = {
-                "user_id": str(row['user_id']),
+                "transaction_id": str(row.get('transaction_id', f"tx_{np.random.randint(1000, 9999)}")),
                 "amount": float(row['amount']),
-                "timestamp": row['timestamp'].isoformat(),
+                "timestamp": row['timestamp'].isoformat() if pd.notnull(row['timestamp']) else datetime.now().isoformat(),
                 "location": str(row['location']),
-                "device_id": str(row['device_id'])
+                "device_type": str(row.get('device_type', 'mobile')),
+                "merchant_id": str(row.get('merchant_id', 'merchant_001')),
+                "user_id": str(row['user_id'])
             }
             transactions_list.append(transaction)
         
@@ -52,7 +68,8 @@ def call_fraud_api(transactions_data):
         )
         
         if response.status_code == 200:
-            return response.json()
+            result = response.json()
+            return pd.DataFrame(result['predictions'])
         else:
             st.error(f"API Error: {response.status_code} - {response.text}")
             return None
@@ -73,16 +90,22 @@ def check_api_health():
         return False
 
 def main():
-    """Main Streamlit application."""
+    """Enhanced Interactive Streamlit Application."""
     
     # Header
-    st.title("🛡️ FraudGuard MVP")
-    st.markdown("**Real-time fraud detection for financial transactions**")
+    st.title("🛡️ FraudGuard MVP - Live Fraud Detection")
+    st.markdown("**Interactive real-time fraud detection with ML-powered insights**")
     
-    # Sidebar
+    # Initialize session state
+    if 'transactions_df' not in st.session_state:
+        st.session_state.transactions_df = None
+    if 'predictions_df' not in st.session_state:
+        st.session_state.predictions_df = None
+    
+    # Sidebar Configuration
     st.sidebar.header("🔧 Configuration")
     
-    # Check API health
+    # API Health Check
     api_healthy = check_api_health()
     if api_healthy:
         st.sidebar.success("✅ API is healthy")
@@ -90,227 +113,321 @@ def main():
         st.sidebar.error("❌ API is not available")
         st.sidebar.markdown("Please start the backend server:")
         st.sidebar.code("cd backend && python main.py")
+        st.stop()
     
-    # Data source selection
-    st.sidebar.subheader("Data Source")
-    data_source = st.sidebar.radio(
-        "Choose data source:",
-        ["Upload CSV File", "Generate Random Data"]
-    )
+    # 🚀 Live Prediction Feature
+    st.header("🚀 Live Fraud Detection")
     
-    # Initialize session state
-    if 'transaction_data' not in st.session_state:
-        st.session_state.transaction_data = None
-    if 'predictions' not in st.session_state:
-        st.session_state.predictions = None
+    col1, col2, col3 = st.columns([2, 1, 1])
     
-    # Data loading section
-    st.header("📊 Data Loading")
+    with col1:
+        n_transactions = st.slider("Number of transactions to generate:", 10, 200, 50)
     
-    if data_source == "Upload CSV File":
-        uploaded_file = st.file_uploader(
-            "Upload a CSV file with transaction data",
-            type=['csv'],
-            help="CSV should contain columns: user_id, amount, timestamp, location, device_id"
+    with col2:
+        if st.button("🎲 Generate & Detect Fraud", type="primary"):
+            with st.spinner("Generating transactions and detecting fraud..."):
+                # Generate sample data
+                transactions_df = generate_sample_data(n_transactions)
+                if transactions_df is not None:
+                    st.session_state.transactions_df = transactions_df
+                    
+                    # Get fraud predictions
+                    predictions_df = call_fraud_prediction_api(transactions_df)
+                    if predictions_df is not None:
+                        st.session_state.predictions_df = predictions_df
+                        st.success(f"✅ Processed {len(predictions_df)} transactions!")
+    
+    with col3:
+        if st.button("🗑️ Clear Results"):
+            st.session_state.transactions_df = None
+            st.session_state.predictions_df = None
+            st.rerun()
+    
+    # Display results if available
+    if st.session_state.predictions_df is not None:
+        predictions_df = st.session_state.predictions_df.copy()
+        
+        # Convert timestamp column for filtering
+        if 'timestamp' in predictions_df.columns:
+            predictions_df['timestamp'] = pd.to_datetime(predictions_df['timestamp'])
+        
+        # 📊 Sidebar Filters
+        st.sidebar.header("🔍 Filters")
+        
+        # Date range filter
+        if 'timestamp' in predictions_df.columns:
+            min_date = predictions_df['timestamp'].min().date()
+            max_date = predictions_df['timestamp'].max().date()
+            
+            date_range = st.sidebar.date_input(
+                "Date Range:",
+                value=(min_date, max_date),
+                min_value=min_date,
+                max_value=max_date
+            )
+        
+        # Amount range filter
+        min_amount = float(predictions_df['amount'].min())
+        max_amount = float(predictions_df['amount'].max())
+        
+        amount_range = st.sidebar.slider(
+            "Amount Range ($):",
+            min_value=min_amount,
+            max_value=max_amount,
+            value=(min_amount, max_amount),
+            step=1.0
         )
         
-        if uploaded_file is not None:
-            try:
-                df = pd.read_csv(uploaded_file)
-                
-                # Validate required columns
-                required_columns = ['user_id', 'amount', 'timestamp', 'location', 'device_id']
-                missing_columns = [col for col in required_columns if col not in df.columns]
-                
-                if missing_columns:
-                    st.error(f"Missing required columns: {missing_columns}")
-                    st.info("Please ensure your CSV has these columns: user_id, amount, timestamp, location, device_id")
-                else:
-                    # Convert timestamp to datetime
-                    df['timestamp'] = pd.to_datetime(df['timestamp'])
-                    st.session_state.transaction_data = df
-                    st.success(f"✅ Loaded {len(df)} transactions from CSV")
-                    
-            except Exception as e:
-                st.error(f"Error reading CSV file: {str(e)}")
-    
-    else:  # Generate Random Data
-        col1, col2 = st.columns(2)
+        # Fraud filter toggle
+        fraud_filter = st.sidebar.selectbox(
+            "Show Transactions:",
+            options=["All", "Fraudulent Only", "Normal Only"]
+        )
+        
+        # Apply filters
+        filtered_df = predictions_df.copy()
+        
+        # Date filter
+        if 'timestamp' in filtered_df.columns and len(date_range) == 2:
+            start_date, end_date = date_range
+            filtered_df = filtered_df[
+                (filtered_df['timestamp'].dt.date >= start_date) &
+                (filtered_df['timestamp'].dt.date <= end_date)
+            ]
+        
+        # Amount filter
+        filtered_df = filtered_df[
+            (filtered_df['amount'] >= amount_range[0]) &
+            (filtered_df['amount'] <= amount_range[1])
+        ]
+        
+        # Fraud filter
+        if fraud_filter == "Fraudulent Only":
+            filtered_df = filtered_df[filtered_df['fraud_flag'] == 1]
+        elif fraud_filter == "Normal Only":
+            filtered_df = filtered_df[filtered_df['fraud_flag'] == 0]
+        
+        # 📈 Metrics Dashboard
+        st.header("📈 Metrics Dashboard")
+        
+        total_transactions = len(filtered_df)
+        total_frauds = len(filtered_df[filtered_df['fraud_flag'] == 1])
+        fraud_percentage = (total_frauds / total_transactions * 100) if total_transactions > 0 else 0
+        total_amount = filtered_df['amount'].sum()
+        
+        col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            num_transactions = st.number_input(
-                "Number of transactions to generate",
-                min_value=10,
-                max_value=10000,
-                value=1000,
-                step=100
+            st.metric(
+                "Total Transactions",
+                f"{total_transactions:,}",
+                delta=None
             )
         
         with col2:
-            if st.button("🎲 Generate Random Data", type="primary"):
-                with st.spinner("Generating transaction data..."):
-                    df = generate_transaction_data(num_transactions)
-                    st.session_state.transaction_data = df
-                    st.success(f"✅ Generated {len(df)} random transactions")
-    
-    # Display data and run fraud detection
-    if st.session_state.transaction_data is not None:
-        df = st.session_state.transaction_data
+            st.metric(
+                "Fraudulent Transactions", 
+                f"{total_frauds:,}",
+                delta=f"{fraud_percentage:.1f}%"
+            )
         
-        # Fraud Detection Section
-        st.header("🔍 Fraud Detection")
+        with col3:
+            st.metric(
+                "Fraud Rate",
+                f"{fraud_percentage:.1f}%",
+                delta=None
+            )
         
-        col1, col2 = st.columns(2)
+        with col4:
+            st.metric(
+                "Total Amount",
+                f"${total_amount:,.2f}",
+                delta=None
+            )
         
-        with col1:
-            if st.button("🚀 Run Fraud Detection", type="primary", disabled=not api_healthy):
-                if api_healthy:
-                    with st.spinner("Analyzing transactions for fraud..."):
-                        result = call_fraud_api(df)
-                        
-                        if result:
-                            st.session_state.predictions = result
-                            st.success("✅ Fraud detection completed!")
-                        else:
-                            st.error("❌ Failed to get fraud predictions")
-                else:
-                    st.error("API is not available. Please start the backend server.")
+        # Fraud percentage gauge chart
+        if total_transactions > 0:
+            fig_gauge = go.Figure(go.Indicator(
+                mode = "gauge+number+delta",
+                value = fraud_percentage,
+                domain = {'x': [0, 1], 'y': [0, 1]},
+                title = {'text': "Fraud Percentage"},
+                delta = {'reference': 5.0},  # Reference fraud rate
+                gauge = {
+                    'axis': {'range': [None, 100]},
+                    'bar': {'color': "darkblue"},
+                    'steps': [
+                        {'range': [0, 5], 'color': "lightgray"},
+                        {'range': [5, 15], 'color': "yellow"},
+                        {'range': [15, 100], 'color': "red"}
+                    ],
+                    'threshold': {
+                        'line': {'color': "red", 'width': 4},
+                        'thickness': 0.75,
+                        'value': 90
+                    }
+                }
+            ))
+            fig_gauge.update_layout(height=300)
+            st.plotly_chart(fig_gauge, use_container_width=True)
         
-        with col2:
-            if st.session_state.predictions:
-                summary = st.session_state.predictions['summary']
-                st.metric(
-                    "Fraud Detection Rate",
-                    f"{summary['fraud_percentage']:.1f}%",
-                    f"{summary['fraudulent_transactions']} of {summary['total_transactions']} transactions"
-                )
+        # 📊 Visual Display with Color Coding
+        st.header("📊 Transaction Analysis")
         
-        # Results Section
-        if st.session_state.predictions:
-            st.header("📈 Results")
-            
-            # Summary metrics
-            summary = st.session_state.predictions['summary']
-            
-            col1, col2, col3, col4 = st.columns(4)
-            
-            with col1:
-                st.metric("Total Transactions", summary['total_transactions'])
-            
-            with col2:
-                st.metric("Suspicious Transactions", summary['fraudulent_transactions'])
-            
-            with col3:
-                st.metric("Normal Transactions", summary['normal_transactions'])
-            
-            with col4:
-                st.metric("Fraud Rate", f"{summary['fraud_percentage']:.1f}%")
-            
-            # Convert predictions to DataFrame
-            predictions_df = pd.DataFrame(st.session_state.predictions['predictions'])
-            predictions_df['timestamp'] = pd.to_datetime(predictions_df['timestamp'])
-            
-            # Filters
-            st.subheader("🔍 Filters")
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                show_fraud_only = st.checkbox("Show only suspicious transactions")
-            
-            with col2:
-                fraud_filter = st.selectbox(
-                    "Filter by fraud status:",
-                    ["All", "Fraudulent Only", "Normal Only"]
-                )
-            
-            # Apply filters
-            filtered_df = predictions_df.copy()
-            
-            if show_fraud_only or fraud_filter == "Fraudulent Only":
-                filtered_df = filtered_df[filtered_df['fraud_flag'] == 1]
-            elif fraud_filter == "Normal Only":
-                filtered_df = filtered_df[filtered_df['fraud_flag'] == 0]
-            
-            # Data table
+        if total_transactions > 0:
+            # Sortable DataFrame with Color Coding
             st.subheader("📋 Transaction Details")
             
-            if len(filtered_df) > 0:
-                # Style the dataframe
-                def highlight_fraud(row):
-                    if row['fraud_flag'] == 1:
-                        return ['background-color: #ffebee'] * len(row)
-                    else:
-                        return [''] * len(row)
-                
-                styled_df = filtered_df.style.apply(highlight_fraud, axis=1)
-                st.dataframe(styled_df, use_container_width=True)
-                
-                # Download button
-                csv = filtered_df.to_csv(index=False)
+            # Sorting options
+            sort_options = ['timestamp', 'amount', 'fraud_flag', 'user_id']
+            sort_by = st.selectbox("Sort by:", sort_options, index=0)
+            sort_ascending = st.checkbox("Ascending order", value=False)
+            
+            # Sort the dataframe
+            display_df = filtered_df.sort_values(by=sort_by, ascending=sort_ascending)
+            
+            # Color coding function
+            def highlight_fraud_rows(row):
+                if row['fraud_flag'] == 1:
+                    return ['background-color: #ffcdd2; color: #d32f2f'] * len(row)  # Red for fraud
+                else:
+                    return ['background-color: #c8e6c9; color: #388e3c'] * len(row)  # Green for normal
+            
+            # Apply styling and display
+            styled_df = display_df.style.apply(highlight_fraud_rows, axis=1)
+            st.dataframe(styled_df, use_container_width=True, height=400)
+            
+            # CSV Download Feature
+            st.subheader("📥 Export Results")
+            
+            col1, col2 = st.columns([1, 1])
+            
+            with col1:
+                # Download all results
+                csv_all = display_df.to_csv(index=False)
                 st.download_button(
-                    label="📥 Download Results as CSV",
-                    data=csv,
-                    file_name=f"fraud_detection_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                    mime="text/csv"
+                    label="📄 Download All Results",
+                    data=csv_all,
+                    file_name=f"fraud_detection_all_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                    use_container_width=True
                 )
-            else:
-                st.info("No transactions match the current filters.")
             
-            # Visualizations
-            st.subheader("📊 Visualizations")
+            with col2:
+                # Download only flagged results
+                flagged_df = display_df[display_df['fraud_flag'] == 1]
+                if len(flagged_df) > 0:
+                    csv_flagged = flagged_df.to_csv(index=False)
+                    st.download_button(
+                        label="🚨 Download Flagged Only",
+                        data=csv_flagged,
+                        file_name=f"fraud_detection_flagged_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv",
+                        use_container_width=True
+                    )
+                else:
+                    st.info("No fraudulent transactions to download")
             
-            if len(predictions_df) > 0:
-                col1, col2 = st.columns(2)
+            # 📊 Interactive Visualizations
+            st.subheader("📊 Interactive Visualizations")
+            
+            viz_col1, viz_col2 = st.columns(2)
+            
+            with viz_col1:
+                # Fraud Distribution Pie Chart
+                fraud_counts = display_df['fraud_flag'].value_counts()
+                labels = ['Normal', 'Fraudulent']
+                values = [fraud_counts.get(0, 0), fraud_counts.get(1, 0)]
                 
-                with col1:
-                    # Fraud distribution pie chart
-                    fraud_counts = predictions_df['fraud_flag'].value_counts()
-                    fig_pie = px.pie(
-                        values=fraud_counts.values,
-                        names=['Normal', 'Fraudulent'],
-                        title="Transaction Distribution",
-                        color_discrete_map={'Normal': '#4CAF50', 'Fraudulent': '#F44336'}
-                    )
-                    st.plotly_chart(fig_pie, use_container_width=True)
-                
-                with col2:
-                    # Amount distribution by fraud status
-                    fig_box = px.box(
-                        predictions_df,
-                        x='fraud_flag',
-                        y='amount',
-                        title="Amount Distribution by Fraud Status",
-                        labels={'fraud_flag': 'Fraud Flag (0=Normal, 1=Fraud)', 'amount': 'Transaction Amount'},
-                        color='fraud_flag',
-                        color_discrete_map={0: '#4CAF50', 1: '#F44336'}
-                    )
-                    st.plotly_chart(fig_box, use_container_width=True)
-                
-                # Time series plot
-                if len(predictions_df) > 1:
-                    fig_time = px.scatter(
-                        predictions_df.sort_values('timestamp'),
-                        x='timestamp',
-                        y='amount',
-                        color='fraud_flag',
-                        title="Transactions Over Time",
-                        labels={'fraud_flag': 'Fraud Flag', 'amount': 'Amount'},
-                        color_discrete_map={0: '#4CAF50', 1: '#F44336'}
-                    )
-                    fig_time.update_layout(showlegend=True)
-                    st.plotly_chart(fig_time, use_container_width=True)
+                fig_pie = px.pie(
+                    values=values,
+                    names=labels,
+                    title="Transaction Distribution",
+                    color_discrete_map={'Normal': '#4CAF50', 'Fraudulent': '#F44336'}
+                )
+                fig_pie.update_traces(textposition='inside', textinfo='percent+label')
+                st.plotly_chart(fig_pie, use_container_width=True)
+            
+            with viz_col2:
+                # Amount Distribution Box Plot
+                fig_box = px.box(
+                    display_df,
+                    x='fraud_flag',
+                    y='amount',
+                    title="Amount Distribution by Fraud Status",
+                    labels={'fraud_flag': 'Fraud Flag (0=Normal, 1=Fraud)', 'amount': 'Amount ($)'},
+                    color='fraud_flag',
+                    color_discrete_map={0: '#4CAF50', 1: '#F44336'}
+                )
+                st.plotly_chart(fig_box, use_container_width=True)
+            
+            # Time Series Scatter Plot
+            if 'timestamp' in display_df.columns and len(display_df) > 1:
+                fig_time = px.scatter(
+                    display_df.sort_values('timestamp'),
+                    x='timestamp',
+                    y='amount',
+                    color='fraud_flag',
+                    title="Transactions Over Time",
+                    labels={'fraud_flag': 'Fraud Status', 'amount': 'Amount ($)'},
+                    color_discrete_map={0: '#4CAF50', 1: '#F44336'},
+                    hover_data=['user_id', 'location']
+                )
+                fig_time.update_layout(showlegend=True)
+                st.plotly_chart(fig_time, use_container_width=True)
+            
+            # Amount Histogram
+            fig_hist = px.histogram(
+                display_df,
+                x='amount',
+                color='fraud_flag',
+                title="Amount Distribution Histogram",
+                labels={'amount': 'Amount ($)', 'count': 'Number of Transactions'},
+                color_discrete_map={0: '#4CAF50', 1: '#F44336'},
+                nbins=30
+            )
+            st.plotly_chart(fig_hist, use_container_width=True)
         
         else:
-            # Show sample data
-            st.subheader("📋 Sample Data")
-            st.dataframe(df.head(10), use_container_width=True)
-            
-            st.info("👆 Run fraud detection to see analysis results")
+            st.info("No transactions match the current filters. Try adjusting your filter settings.")
+    
+    else:
+        # No data loaded yet
+        st.info("👆 Click 'Generate & Detect Fraud' to start analyzing transactions!")
+        
+        # Show example of what the system can do
+        st.header("🎯 What This System Can Do")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.markdown("""
+            **🤖 AI-Powered Detection**
+            - Uses Isolation Forest ML algorithm
+            - Trained on realistic transaction patterns
+            - Detects anomalies in real-time
+            """)
+        
+        with col2:
+            st.markdown("""
+            **📊 Rich Analytics**
+            - Interactive visualizations
+            - Sortable and filterable data
+            - Real-time metrics dashboard
+            """)
+        
+        with col3:
+            st.markdown("""
+            **💾 Export Capabilities**
+            - Download all results as CSV
+            - Export only flagged transactions
+            - Time-stamped file names
+            """)
     
     # Footer
     st.markdown("---")
-    st.markdown("**FraudGuard MVP** - Built with Streamlit, FastAPI, and scikit-learn")
+    st.markdown("**FraudGuard MVP** - Enhanced Interactive Fraud Detection with ML-powered Analytics")
+    st.markdown("Built with Streamlit, FastAPI, scikit-learn, and Plotly")
 
 if __name__ == "__main__":
     main()
