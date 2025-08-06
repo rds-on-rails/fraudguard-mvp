@@ -100,7 +100,7 @@ class FraudDetectionModel:
         for _ in range(n):
             transaction = {
                 'user_id': str(uuid.uuid4()),
-                'amount': fake.pyfloat(left_digits=3, right_digits=2, positive=True, min_value=1.0, max_value=10000.0),
+                'amount': fake.pyfloat(left_digits=5, right_digits=2, positive=True, min_value=1.0, max_value=10000.0),
                 'timestamp': fake.date_time_between(start_date='-30d', end_date='now'),
                 'location': fake.city(),
                 'device_id': str(uuid.uuid4())
@@ -254,7 +254,7 @@ def main():
                 training_data = st.session_state.model.generate_dummy_data(1000)
                 st.session_state.model.train_model(training_data)
                 st.success("Model trained successfully!")
-                st.experimental_rerun()
+                st.rerun()
     
     # Main content area
     col1, col2 = st.columns([2, 1])
@@ -314,7 +314,7 @@ def main():
                     predictions = st.session_state.model.predict_fraud(st.session_state.current_data)
                     st.session_state.predictions = predictions
                     st.success("Analysis complete!")
-                    st.experimental_rerun()
+                    st.rerun()
         else:
             if st.session_state.current_data is None:
                 st.info("📝 Load data first")
