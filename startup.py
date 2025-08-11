@@ -23,6 +23,14 @@ def main():
     
     logger.info(f"Python version: {sys.version}")
     logger.info(f"Starting FraudGuard on port {port}")
+    logger.info(f"Current working directory: {os.getcwd()}")
+    logger.info(f"Python executable: {sys.executable}")
+    
+    # Check if app.py exists
+    if not os.path.exists('app.py'):
+        logger.error("app.py not found in current directory")
+        logger.info(f"Files in current directory: {os.listdir('.')}")
+        sys.exit(1)
     
     # Streamlit command with Azure-compatible settings
     cmd = [
